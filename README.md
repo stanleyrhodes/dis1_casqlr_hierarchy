@@ -1,8 +1,10 @@
-# Dissertation Study 1, Computer-aided systematic quantitative literature review for mapping specific meanings for the term hierarchy in the social sciences
+## Code and data repo for mapping definitions of hierarchy in the social sciences
 
-This repo contains all the code and data used in study 1 of my dissertation, a computer-aided systematic quantitative literature review (SQLR) on how hierarchy is defined in the social sciences.
+This repo contains all the code and data used in study 1 of my dissertation, a computer-aided systematic quantitative literature review (caSQLR) of how hierarchy is defined in the social sciences.
 
-Beware: If you're looking to use this process for your own work, it's doable, but it will require a lot of time and effort. It requires a lot of manual work despite having a lot of scripts to automate processes. However, I think it's an important methodological approach, and I know it can be improved. Not only can it be improved, but the challenges of doing it reveal where we, as scientists, need to step up and take control of open science and literature. The overall approach I use here should be something any researcher can do easily and routinely, rather than engaging in all these workarounds and fiddlings and because we don't have proper control of and access to our body of knowledge.
+Beware: If you're looking to use this process for your own work, it's doable, but it will require a lot of time, effort, and manual work despite having scripts to automate many of the processes. A number of the issues result from having to work against Google Scholar's combination of defenses against automated querying and lack of complete and useful information in its initial results (e.g., truncating author and journal title fields). Google Scholar has full-text indexing, so it's the only game in town. 
+
+The overall approach I use here should be something any researcher can do easily and routinely, rather than engaging in all these workarounds and fiddlings and because we don't have proper control of, and access to, our body of knowledge. We, as scientists, need to step up and take control of open science, literature, and infrastructure. 
 
 ## Procedure overview:
 
@@ -18,32 +20,32 @@ These are pretty much named after what they do:
 
 ## Procedure detailed
 
-First, Scraper API is used, with Scholarly, to get the results from Google Scholar. Those results are written to JSON files with filenames that include the number of results Google Scholar claimed it would get. This is unfortunate, because this number is almost always wrong. So the number of results rarely matches, although is always in the ballpark, of the datafile name. The file for this is scraper_query_to_json.ipynb
+1. Scraper API is used, with Scholarly, to get the results from Google Scholar. Those results are written to JSON files with filenames that include the number of results Google Scholar claimed it would get. This is unfortunate, because this number is almost always wrong. So the number of results rarely matches, although is always in the ballpark, of the datafile name. The file for this is scraper_query_to_json.ipynb
 
 NOTE: Scholarly does not get the full journal title name. Doing so requires Scholarly to open the "Cite" popup to get the full info, and that takes a lot of credits in Scraper API. Doing it for the large initial set is a waste of resources, because many of them will not have full text available. If one were to go through and steamline the process, full citation information should be retrieved for all items that Zotero finds full text data for. This would require exporting data from Zotero for those items and then matching them up with Scholarly results. It was enough of a headache I skipped trying to automate that part. In this study, later in the workflow, once the items have been winnowed down, I get the journal titles manually. Ensuring full data is retrieved would be a HUGE win for saving time with Scholarly, if we could identify which items have full text available.
 
-bib_maker reads the JSON files and makes bib files to import into Zotero. The file for this is bib_maker.ipynb
+2. bib_maker reads the JSON files and makes bib files to import into Zotero. The file for this is bib_maker.ipynb
 
-Using Zotero's import option, we import every bib file into its own folder in Zotero, under a main folder for the project. (Note: the "folders" are more playlists.)
+3. Using Zotero's import option, we import every bib file into its own folder in Zotero, under a main folder for the project. 
 
-After Zotero has all the items, each bib being its own directory, the items are tagged with the search that led to them. This allows us to know why there are dupes, among other things, because an item in multiple folders will have multiple tags: one from each folder. Unfortunately, since the bib files have only ballpark numbers, so too do the directories of items. They don't match the actual number of items.
+NOTE: Zotero's folders don't match the metaphor of a file folder. It's like Zotero's quickstart says, "Think of collections like playlists in a music player: items in collections are aliases (or "links") to a single copy of the item in your library. The same item can belong to many collections at one time."
 
-Once everything is tagged, all the PDFs are requested via Zotero's Request PDF option. Despite being automated, it's a long and tedious process because it will hang from sites not responding. The Zotero developers may have fixed some of these hanging issues after I reported them.
+4. After Zotero has all the items, each bib being its own directory, the items are tagged with the search that led to them. This allows us to know why there are dupes, among other things, because an item in multiple folders will have multiple tags: one from each folder. Use the Zotero tag manager plugin https://github.com/windingwind/zotero-tag to make the tagging process much easier. Unfortunately, since the bib files have only ballpark numbers, so too do the directories of items. They don't match the actual number of items. I would do this differently if I were to repeat this process; I didn't realize how inaccurate Google Scholar's item counts would be.
 
-Those items with PDFs are then put into a new directory so we have them all together.
+5. Once everything is tagged, all the PDFs are requested via Zotero's Request PDF option. Despite being automated, it's a long and tedious process because it will hang from sites not responding. The Zotero developers may have fixed some of these hanging issues after I reported them.
 
-The code in C:\Users\Rock\Documents\GitHub\ch1-hier-casqlr\zotero_json_fulltext.js is then pasted into Zotero's javascript window and run. This Zotero option is accessible Tools > Developer > Run javascript. This outputs yet more JSON, this time in little chunks of 250. These chunks are a single line of text, but include 250 items, with some metadata, and the full text.
+6. Those items with PDFs are then put into a new directory so we have them all together. Items in Zotero can be sorted by presence of PDF / attachment, making this fairly easy.
 
-We then extract snippets using snippet_extractor.ipynb. A python JSON/CSV parser that, item by item:
+7. The code in zotero_json_fulltext.js is then pasted into Zotero's javascript window and run. This Zotero option is accessible Tools > Developer > Run javascript. This outputs yet more JSON, this time in little chunks of 250. These chunks are a single line of text, but include 250 items, with some metadata, and the full text.
+
+8. We then extract snippets using snippet_extractor.ipynb. A python JSON/CSV parser that, item by item:
 	- extracts the full-text
 	- identifies and counts the number of definitional phrases in the full-text
 	- identifies the surrounding (pre, post, and including) sentences for each (the definitonal snippet)
 	- if only one phrase, writes the definitional snippet to that entry
 	- if more than one phrase, creates a new entry for every occurrence above 1.
 
-Thus, we can have more snippets than we have items from Zotero.
-
-NOTE: Zotero's folders don't match the metaphor of a file folder. It's like Zotero's quickstart says, "Think of collections like playlists in a music player: items in collections are aliases (or “links”) to a single copy of the item in your library. The same item can belong to many collections at one time."
+Thus, we can have more snippets than we have items from Zotero, which is totally ok, but something to remember.
 
 The final step, getting journal titles, is detailed below.
 
