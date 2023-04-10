@@ -54,7 +54,7 @@ The final step, getting journal titles, is detailed below.
 None of the original items in the imported bibtex Zotero folders have the journal title. If we work backwards, we know that the bibtex files not having the journal titles means that the entires retrieved through Scholarly didn't have the journal titles, because the bibtext came from Scholarly. I wasn't going to spend the money (grad student here!) or hit Google Scholar with queries to get the full metadata for thousands of items that wouldn't make it through the screening process. But more importantly for this particular study, this raises the question of where journal titles came from to assign Scopus categories to. Unfortunately, I did it by hand. Here is the process; it's not as bad as it sounds to do this manually.
 
 1. First, make a separate Zotero collection for this.
-2. Programmatically create duckduckgo searches using item titles, where "!gsc" will result in a Google Scholar search for the string (this can be done in Notepad++)
+2. Programmatically create duckduckgo searches using item titles (this can be done in Notepad++)
 3. Strip all punctuation and replacing spaces with + symbols
 4. Paste all of them in Excel col B
 5. In col A use the HYPERLINK=B1 function to make these clickable in excel

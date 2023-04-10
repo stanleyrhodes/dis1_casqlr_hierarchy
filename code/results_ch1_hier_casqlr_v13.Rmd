@@ -1,0 +1,1505 @@
+---
+title: "Results for the caSQLR hierarchy study"
+author: "Stan Rhodes"
+output:
+  word_document:
+    reference_docx: template_knitr.docx
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r echo=FALSE, include=FALSE}
+### load libraries here
+
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+library(scales)
+library(forcats)
+library(viridis)
+library(stopwords)
+
+
+```
+
+
+## An explanation of the metadata situation
+
+The original data from Scholarly didn't contain full metadata. This means that all items DO have full titles (not Google Scholar truncated ones) and the year, but only snippet stuff for abstract, and no publication title at all, nor other metadata. But we need the journal title for classifying the field, when possible!
+
+This means that we'll need to get the metadata for the items that matter. Thus, I retrieved (by hand!) the metadata for all items that were, ultimately, approved for the analysis. This ended up being ~980 items, some of which have multiple definitional snippets; thus the snippet number is closer to ~1100. With this metadata in Zotero, I can then export the metadata as a csv. Then, in the data cleaning phase, I can merge the metadata and the coded items by title. It will not be a 100% clean process because there are some items with issues, and I have those saved in a separate file, title_links_for_manual_zotero_entry.xlsx. These are ~30 of these items that clearly had issues, such as the author or journal being the title of the item. Out of thousands of items, it's surprising that so few had such issues. These items will need some manual wrangling during the cleaning phase.
+
+
+## Data loading
+
+```{r echo=FALSE, include=FALSE}
+
+## Data loading
+
+# Load the main CSV file with coded items.
+
+### Load the file
+
+thefile <- "./data_for_reading/all_6857_snippets_coded_noblanks.csv"
+
+# snippet_df <- readr::read_csv(thefile, quote = "\"")
+
+snippet_df <- readr::read_delim(thefile, delim = ",", quote = "\"", escape_backslash = TRUE,
+  escape_double = TRUE, col_names = TRUE, col_types = NULL,
+  locale = default_locale(), na = c("", "NA"), quoted_na = TRUE,
+  comment = "", trim_ws = FALSE, skip = 0)
+
+# library(data.table)
+# 
+# foobar <- data.table::fread(thefile)
+
+```
+
+
+```{r echo=FALSE, include=FALSE}
+# just some quick and dirty tests of the df
+
+count(snippet_df)
+
+class(snippet_df)
+
+snippet_df %>%
+  dplyr::distinct(code)
+
+```
+
+Load the metadata CSV file for the files that were not excluded or dupes.
+
+Whatever items that remain after the cleaning will need some metadata, particularly the journal title so that I can look the item up in the Scopus SCIMAGO and get the discipline/field. (Since there are a lot of theses, and a number of book chapters, we probably won't have a lot of success here, but I'm hoping for a little.)
+
+```{r echo=FALSE, include=FALSE}
+
+### Load the file
+
+metadata_file <- "./data_for_reading/ch1 metadata by hand_v03.csv"
+
+# snippet_df <- readr::read_csv(thefile, quote = "\"")
+
+meta_df <- readr::read_delim(metadata_file, delim = ",", quote = "\"", escape_backslash = TRUE,
+  escape_double = TRUE, col_names = TRUE, col_types = NULL,
+  locale = default_locale(), na = c("", "NA"), quoted_na = TRUE,
+  comment = "", trim_ws = FALSE, skip = 0)
+
+# library(data.table)
+# 
+# foobar <- data.table::fread(thefile)
+
+head(meta_df)
+
+```
+
+
+
+## Data cleaning
+
+Cleaning mostly involves getting the coded characters into a more usable format.
+
+1. The rules are basically that anything can be a combo and unclear.
+2. Anything that's m for mixed and u for unclear should have the m removed.
+3. I can then create columns for each subtype. But rc should be the same as cr.
+4. Anything that is a combo and NOT unclear, e.g. rc, cr, should be marked with m for mixed.
+5. Anything that's e or d should be counted (separately), then removed. Anything that's e and d can just be counted as d. 
+
+
+
+```{r echo=FALSE, include=FALSE}
+# clean em
+
+# columns I'll need:
+# ranked, nested, control, other, mixed, unclear
+
+# I think booleans will work if they sum
+
+# foo = c(TRUE, FALSE, TRUE, TRUE, TRUE, FALSE, FALSE, TRUE)
+# sum(foo)
+
+# sweet
+
+# Rename the columns to sensible things
+
+snippet_df <- snippet_df %>%
+  rename(zot_id = '0',
+         title = '1',
+         search_term = '2',
+         def_snippet = '3'
+         )
+
+
+# The order of the sequence of operations probably matters here.
+
+# 1. The rules are basically that anything can be a combo and unclear.
+
+# 2. Anything that's m for mixed and u for unclear should have the m removed.
+
+sort_snippet_df <- snippet_df %>%
+ rowwise() %>%
+ mutate(sort_code = paste(sort(unlist(strsplit(code, "", fixed = TRUE))), collapse = ""))
+
+  # We'll sort again later after more operations.
+
+sort_snippet_df$sort_code <- 
+  ifelse(grepl("u", sort_snippet_df$sort_code) & 
+           grepl("m", sort_snippet_df$sort_code),
+         str_replace_all(sort_snippet_df$sort_code, 'm', ''), sort_snippet_df$sort_code)
+
+# 3. I can then create columns for each subtype. But rc should be the same as cr.
+
+sort_snippet_df$unclear <- ifelse(grepl("u", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$rank <- ifelse(grepl("r", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$control <- ifelse(grepl("c", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$nest <- ifelse(grepl("n", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$other <- ifelse(grepl("o", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$dupe <- ifelse(grepl("d", sort_snippet_df$sort_code), TRUE, FALSE)
+sort_snippet_df$exclude <- ifelse(grepl("e", sort_snippet_df$sort_code), TRUE, FALSE)
+
+# 4. Anything that is a combo and NOT unclear, e.g. rc, cr, should be marked with m for mixed.
+
+sort_snippet_df$mixed <- 
+  ifelse(nchar(sort_snippet_df$code) > 1 & 
+           !(grepl("u", sort_snippet_df$sort_code)) & 
+           !(grepl("d", sort_snippet_df$sort_code)) &
+           !(grepl("e", sort_snippet_df$sort_code)), 
+         TRUE, FALSE)
+
+sort_snippet_df$sort_code <-
+  ifelse(nchar(sort_snippet_df$sort_code) > 1 & 
+           !(grepl("m", sort_snippet_df$sort_code)) &
+           !(grepl("u", sort_snippet_df$sort_code)) &
+           !(grepl("d", sort_snippet_df$sort_code)) &
+           !(grepl("e", sort_snippet_df$sort_code)), 
+         paste0('m', sort_snippet_df$sort_code), sort_snippet_df$sort_code)
+
+# 5. Anything that's e or d should be counted (separately), then removed. Anything that's e and d can just be counted as d.
+
+# 6. Straighten up the codes so that order doesn't matter, e.g. rc and cr are the same.
+
+sort_snippet_df %>%
+  dplyr::distinct(code)
+
+sort_snippet_df <- sort_snippet_df %>%
+ rowwise() %>%
+ mutate(sort_code = paste(sort(unlist(strsplit(sort_code, "", fixed = TRUE))), collapse = ""))
+
+sort_snippet_df %>%
+  dplyr::distinct(sort_code)
+
+# Recheck the distincts
+
+sort_snippet_df %>%
+  dplyr::distinct(sort_code)
+
+
+
+```
+
+```{r echo=FALSE, include=FALSE}
+# 5. Anything that's e or d should be counted (separately), then removed. Anything that's e and d can just be counted as d.
+
+print(paste0("Dupes: ", sum(sort_snippet_df$dupe), 
+             ", Excludes: ", sum(sort_snippet_df$exclude),
+             ", Total removed: ", sum(sort_snippet_df$dupe) + sum(sort_snippet_df$exclude)
+             ))
+
+
+
+```
+
+```{r echo=FALSE, include=FALSE}
+
+# Final data set without dupes or exclusions for the analysis
+
+clean_snippet_df <- sort_snippet_df %>%
+  filter(dupe == FALSE & exclude == FALSE) %>%
+  select(-dupe, -exclude, -notes)
+
+
+print(paste0("Rows remaining: ", count(snippet_df)))
+
+```
+```{r echo=FALSE, include=FALSE}
+# Assign unique ids because some zot_ids have multiple defs and thus entries.
+
+clean_snippet_df <- tibble::rowid_to_column(clean_snippet_df, "uniq_id")
+
+
+```
+
+There's an issue. I don't have the journal of the articles, only the titles.
+
+Those titles were not transferred in the JSON.
+
+It might also be possible to just get that as an export out of Zotero.
+
+ISSUE: Scholarly didn't include the "journal" data, just the "venue" data
+which is the snippet, truncated GSC shit. So thus, none of my data has it.
+
+Can I use Zotero to get it? The DOI addon thing? Maybe, but there's an issue.
+ISSUE: If I do this in my current library, it will overwrite what I have.
+There is no way for me to keep a clean, pristine copy of my data.
+There is no way for me to version control it.
+
+BACKUP PLAN:
+It can be done manually in a really stupid way.
+First, make a separate Zotero collection for this.
+I can programmatically create duckduckgo searches using item titles
+Can be done in notepad++
+Striping all punctuation and replacing spaces with + symbols
+Paste all of them in Excel col B
+In col A use the HYPERLINK=B1 function to make these clickable in excel
+I can then open ~500 tabs and then in each of them, go to the obvious page.
+I can then Zotero each of the pages.
+And I have done this stupid plan.
+
+Now to add the metadata for the included items.
+
+
+```{r echo=FALSE, include=FALSE}
+
+# First we make columns that will be lower case and no punctuation to make the merge easier.
+
+# Make column for snippet_df
+
+clean_snippet_df <- clean_snippet_df %>%
+  mutate(merg_title = title) %>%
+  mutate(merg_title = gsub("[^a-zA-Z ]", "", merg_title)) %>%
+  # mutate(merg_title = (tolower(gsub('[[:punct:] ]+',' ', title)))) %>%
+  mutate(merg_title = tolower(merg_title)) %>%
+#  mutate(merg_title = str_squish(merg_title)) %>%
+  mutate(merg_title = gsub(" ", "", merg_title)) %>%
+  mutate(merg_title = str_sub(merg_title,1,100)) 
+
+# Make column for meta_df
+
+clean_meta_df <- meta_df %>%
+  clean_names() %>%
+  mutate(merg_title = title) %>%
+  mutate(merg_title = gsub("[^a-zA-Z ]", "", merg_title)) %>%
+  # mutate(merg_title = (tolower(gsub('[[:punct:] ]+',' ', title)))) %>%
+  mutate(merg_title = tolower(merg_title)) %>%
+#  mutate(merg_title = str_squish(merg_title)) %>%
+  mutate(merg_title = gsub(" ", "", merg_title)) %>%
+  mutate(merg_title = str_sub(merg_title,1,100))
+
+# mutate(merg_title = gsub("[^a-zA-Z ]", "", merg_title))
+
+
+```
+
+A few titles need special help merging.
+
+```{r echo=FALSE, include=FALSE}
+# Load the Rosetta csv here.
+
+ros_file <- "./data_for_reading/messy_rosetta_v03.csv"
+
+# snippet_df <- readr::read_csv(thefile, quote = "\"")
+
+ros_df <- readr::read_delim(ros_file, delim = ",", quote = "\"", escape_backslash = TRUE,
+  escape_double = TRUE, col_names = TRUE, col_types = NULL,
+  locale = default_locale(), na = c("", "NA"), quoted_na = TRUE,
+  comment = "", trim_ws = FALSE, skip = 0)
+
+```
+
+```{r echo=FALSE, include=FALSE}
+
+ros_df <- ros_df %>%
+  select(merg_title, new_merg_title)
+
+merg_meta_df <- left_join(clean_meta_df, ros_df, by="merg_title")
+
+clean_meta_df <- merg_meta_df %>%
+  mutate(merg_title = case_when(is.na(new_merg_title) ~ merg_title,
+                                TRUE ~ new_merg_title))
+
+```
+
+
+Now to join the two dfs and see how bad it is.
+
+```{r echo=FALSE, include=FALSE}
+
+clean_master_df <- left_join(clean_snippet_df, clean_meta_df, by="merg_title")
+
+```
+
+
+```{r echo=FALSE, include=FALSE}
+messy_items <- clean_master_df %>%
+  filter(is.na(key)) %>%
+  select(title.x, merg_title, item_type)
+
+# write.csv(messy_items,"messy_items_v10.csv", row.names = FALSE)
+
+```
+
+
+```{r echo=FALSE, include=FALSE}
+
+right_df <- right_join(clean_snippet_df, clean_meta_df, by="merg_title")
+
+messy_meta <- right_df %>%
+  filter(is.na(uniq_id)) %>%
+  select(title.y, merg_title, uniq_id, zot_id)
+
+# write.csv(messy_meta,"messy_meta_v10.csv", row.names = FALSE)
+
+```
+
+
+
+```{r echo=FALSE, include=FALSE}
+
+messy_items
+messy_meta
+
+dplyr::filter(clean_master_df, grepl('Embracing', title.x))
+
+dplyr::filter(clean_master_df, grepl('Humour', title.x))
+
+```
+
+For merging titles, we can just take the longer of the two as the real title.
+
+```{r echo=FALSE, include=FALSE}
+clean_master_df <- clean_master_df %>%
+  mutate(title = case_when(nchar(title.x) > nchar(title.y) ~ title.x,
+                                TRUE ~ title.y))
+```
+
+
+"Embracing uncertainty: A study of organizational search and structure" is definitely
+an exact dupe with with "Embracing uncertainty"
+The _pdfs_only has it with and without the subtitle, both PDFs look the same.
+Looks like the one with the longer title was marked as a dupe when coding.
+That's fine.
+
+"The Divisive Power of Humour" is a dupe of the similar longer title.
+The author is wrong, given as "Taste, C" instead of Friedman et al.
+
+Final cleanup:
+THE STATE Exclude. Presentation for a sociology class.
+Educational Video Group Inc Exclude. DVD advertisement with scholarly text. 
+The CordWeekly Exclude. Column in campus newspaper
+
+```{r echo=FALSE, include=FALSE}
+clean_master_df <- clean_master_df %>%
+  dplyr::filter(!grepl('THE STATE', title.x)) %>%
+  dplyr::filter(!grepl('Educational Video Group', title.x)) %>%
+  dplyr::filter(!grepl('CordWeekly', title.x)) %>%
+  dplyr::filter(!grepl('The Divisive Power of Humour', title.x))
+
+```
+
+
+### Now we use sjrdata to try to label some of the articles with field categories
+
+
+```{r echo=FALSE, include=FALSE}
+
+# First we look at sjrdata.
+
+# This was used with SQLR in 
+# Liao, Y., Deschamps, F., Loures, E. D. F. R., & Ramos, L. F. P. (2017). Past, present and future of Industry 4.0-a systematic literature review and research agenda proposal. International journal of production research, 55(12), 3609-3629.
+
+# load
+library(sjrdata)
+
+# Try head to view a few of the large journal dataframe
+head(sjr_journals)
+
+# The col name is categories for the scopus designation, title for the journal.
+# When searching lowercase the title.
+# Make a sub dataframe that's only the title and categories.
+
+# This leads to a question. How do we have only distinct journals and categories?
+# We should eliminate duplicates. It looks like unique(df) can be used
+
+summary(sjr_journals)
+distinct(sjr_journals, title)
+
+tits_cats <- sjr_journals %>%
+  select(title, categories) %>%
+  unique()
+
+head(tits_cats)
+
+summary(tits_cats)
+
+distinct(tits_cats, title)
+
+arrange(tits_cats, title)
+
+# Ok, what I'm going to do is summarize by title, then append the cells together
+# using a semicolon separator. Then I'm going to use a function like unique to 
+# process each cell as an array to get rid of dupes.
+
+smmed_tits_cats <- tits_cats %>%
+   group_by(title) %>%
+   dplyr::summarise(mrg_categories=paste(categories, collapse="; "))
+
+arrange(smmed_tits_cats, title)
+
+clean_the_cat_strings <- function(dupey_string) {
+  d <- unlist(strsplit(dupey_string, split="; "))
+  cleaned_d <- paste(unique(d), collapse = '; ')
+  return(cleaned_d)
+}
+
+# vectorized function
+clean_the_cat_strings_V <- Vectorize(clean_the_cat_strings)
+
+cndsd_tits_cats <- smmed_tits_cats %>%
+  mutate(cleaned_cats = clean_the_cat_strings_V(mrg_categories)) %>%
+  mutate(dupey_len = nchar(mrg_categories), clean_len = nchar(cleaned_cats))
+
+# works, now I need to join with the journal titles of the data
+
+```
+
+```{r echo=FALSE, include=FALSE}
+
+# Make two jr_title_merg
+
+clean_master_df <- clean_master_df %>%
+  mutate(jr_title_merg = publication_title) %>%
+  mutate(jr_title_merg = gsub("[^a-zA-Z ]", "", jr_title_merg)) %>%
+  mutate(jr_title_merg = tolower(jr_title_merg)) %>%
+  mutate(jr_title_merg = gsub(" ", "", jr_title_merg)) %>%
+  mutate(jr_title_merg = str_sub(jr_title_merg, 1, 100))
+
+
+cndsd_tits_cats <- cndsd_tits_cats %>%
+  rename(sjr_title = title) %>%
+  rename(sjr_categories = cleaned_cats) %>%
+  mutate(jr_title_merg = sjr_title) %>%
+  mutate(jr_title_merg = gsub("[^a-zA-Z ]", "", jr_title_merg)) %>%
+  mutate(jr_title_merg = tolower(jr_title_merg)) %>%
+  mutate(jr_title_merg = gsub(" ", "", jr_title_merg)) %>%
+  mutate(jr_title_merg = str_sub(jr_title_merg, 1, 100))
+  
+
+head(clean_master_df)
+head(cndsd_tits_cats)
+
+
+```
+
+```{r echo=FALSE, include=FALSE}
+clean_master_df <- left_join(clean_master_df, cndsd_tits_cats, by="jr_title_merg")
+head(clean_master_df)
+
+distinct(clean_master_df, sjr_title)
+
+foo <- clean_master_df %>%
+  filter(!is.na(sjr_title))
+
+```
+
+
+```{r}
+# SAVE THE DATA SO FAR HERE
+# What we've done so far as data file
+save.image(file='ch1_myEnvironment_ready_for_modeling.RData')
+
+```
+
+LOAD LOAD LOAD
+
+```{r}
+# LOAD THE DATA
+# Load what we've done so far as data file.
+load(file="ch1_myEnvironment_ready_for_modeling.RData")
+
+library(tidyverse)
+library(ggplot2)
+library(janitor)
+library(scales)
+library(forcats)
+library(viridis)
+library(stopwords)
+
+```
+
+```{r}
+# Create a sample dataframe for the codebook
+
+set.seed(1)
+clean_master_df %>%
+  ungroup() %>%
+  dplyr::select(uniq_id, def_snippet) %>%
+  slice_sample(n = 30) %>%
+  write.csv("codebook_sample_v01.csv", row.names = FALSE)
+
+```
+
+
+## A Little Exploratory Data Analysis
+
+```{r echo=FALSE, include=FALSE}
+# Testing how tables work
+
+# dat <- read.table(text = "Platformvendor total_NA total_EU total_JP total_Other total_Global
+#      microsoft     870.92   379.56    14.02      107.63      1372.92
+#      nintendo     1743.71   774.77   758.91      189.71      3469.71
+#       other         81.50     5.40    35.41        0.91       123.31
+#        PC           93.34   140.37     0.17       21.88       256.56
+#       sega          27.48     8.10    11.75        1.29        48.66
+#       sony        1526.25  1092.01   470.47      461.29      3549.89",
+#                   header = TRUE, stringsAsFactors = FALSE)
+# 
+# dat2 <- dat %>%
+#   gather(Total, Value, -Platformvendor)
+# 
+# ggplot(dat2, aes(x = Platformvendor, y = Value, fill = Total)) +
+#   geom_col(position = "dodge")
+
+
+```
+
+
+Honestly the way to do it might be to stack the bar graphs as facets.
+The pattern of rank, control, nest being large in that order seems to hold across m and u as well.
+
+
+```{r echo=FALSE, include=FALSE}
+# I can't seem to get this to work.
+# My data rows, as far as categories, don't quite seem to match their examples.
+
+# cats_snippet_df %>%
+#   pivot_longer(names_to = "label", values_to = "count")
+```
+
+
+# Results Outline with figures
+
+This has the research questions and the methods of analysis and visualization.
+
+## RQ 1
+
+RQ 1: When social science literature explicitly defines hierarchy, how often are the definitions covered with the rank-nesting-control typology?
+
+A1: Show bar graphs of basic types. These include rank, nest, control, mixed, other, unclear categories.
+
+```{r echo=FALSE, include=FALSE}
+
+# Change the order of the factors
+
+# CAVEAT: Changed from clean_snippet_df to clean_master_df here. 
+# TODO: Fix if it breaks stuff.
+
+clean_master_df$sort_code <- factor(clean_master_df$sort_code, 
+                                     levels=c('r',
+                                              'n',
+                                              'c',
+                                              'cmn',
+                                              'cmr',
+                                              'cmnr',
+                                              'mnr',
+                                              'cmo',
+                                              'cmor',
+                                              'mor',
+                                              'o',
+                                              'ru',
+                                              'nu',
+                                              'cu',
+                                              'ou',
+                                              'nru',
+                                              'cru',
+                                              'cnru',
+                                              'cnu',
+                                              'oru',
+                                              'noru',
+                                              'cou',
+                                              'cnou',
+                                              'coru',
+                                              'u'))
+
+clean_master_df <- clean_master_df %>%
+  mutate(sort_label = case_when(sort_code=='c' ~ 'control',
+  											         sort_code=='r' ~ 'rank',
+                                 sort_code=='n' ~ 'nest',
+                                 sort_code=='cmn' ~ 'control-nest',
+                                 sort_code=='cmr' ~ 'control-rank',
+                                 sort_code=='cmnr' ~ 'control-nest-rank',
+                                 sort_code=='mnr' ~ 'nest-rank',
+                                 sort_code=='cmo' ~ 'other-control',
+                                 sort_code=='cmor' ~ 'other-control-rank',
+                                 sort_code=='mor' ~ 'other-rank',
+                                 sort_code=='o' ~ 'other',
+                                 sort_code=='ru' ~ 'unclear-rank',
+                                 sort_code=='nu' ~ 'unclear-nest',
+                                 sort_code=='cu' ~ 'unclear-control',
+                                 sort_code=='ou' ~ 'unclear-other',
+                                 sort_code=='nru' ~ 'unclear-nest-rank',
+                                 sort_code=='cru' ~ 'unclear-control-rank',
+                                 sort_code=='cnru' ~ 'unclear-control-nest-rank',
+                                 sort_code=='cnu' ~ 'unclear-control-nest',
+                                 sort_code=='oru' ~ 'unclear-rank-other',
+                                 sort_code=='noru' ~ 'unclear-nest-rank-other',
+                                 sort_code=='cou' ~ 'unclear-control-other',
+                                 sort_code=='cnou' ~ 'unclear-control-nest-other',
+                                 sort_code=='coru' ~ 'unclear-control-rank-other',
+                                 sort_code=='u' ~ 'unclear'),
+         sort_label = factor(sort_label,
+                              levels=c('control',
+                                      'nest',
+                                      'rank',
+                                      'control-nest',
+                                      'control-rank',
+                                      'nest-rank',
+                                      'control-nest-rank',
+                                      'other-control',
+                                      'other-control-rank',
+                                      'other-rank',
+                                      'other',
+                                      'unclear-control',
+                                      'unclear-nest',
+                                      'unclear-rank',
+                                      'unclear-other',
+                                      'unclear-control-nest',
+                                      'unclear-control-rank',
+                                      'unclear-nest-rank',
+                                      'unclear-control-nest-rank',
+                                      'unclear-control-other',
+                                      'unclear-rank-other',
+                                      'unclear-control-nest-other',
+                                      'unclear-control-rank-other',
+                                      'unclear-nest-rank-other',
+                                      'unclear')))
+
+# clean_master_df %>%
+#   mutate(sort_labels = case_when('c' ~ 'control',
+#   											         'r' ~ 'rank',
+#                                  'n' ~ 'nest',
+#                                  'cmn' ~ 'control-nest',
+#                                  'cmr' ~ 'control-rank',
+#                                  'cmnr' ~ 'control-nest-rank',
+#                                  'mnr' ~ 'nest-rank',
+#                                  'cmo' ~ 'control-other',
+#                                  'cmor' ~ 'other-control-rank',
+#                                  'mor' ~ 'other-rank',
+#                                  'o' ~ 'other',
+#                                  'ru' ~ 'unclear-rank',
+#                                  'nu' ~ 'unclear-nest',
+#                                  'cu' ~ 'unclear-control',
+#                                  'ou' ~ 'unclear-other',
+#                                  'nru' ~ 'unclear-nest-rank',
+#                                  'cru' ~ 'unclear-control-rank',
+#                                  'cnru' ~ 'unclear-control-nest-rank',
+#                                  'cnu' ~ 'unclear-control-nest',
+#                                  'oru' ~ 'unclear-rank-other',
+#                                  'noru' ~ 'unclear-nest-rank-other',
+#                                  'cou' ~ 'unclear-control-other',
+#                                  'cnou' ~ 'unclear-control-nest-other',
+#                                  'coru' ~ 'unclear-control-rank-other',
+#                                  'u' ~ 'unclear'))
+
+```
+
+
+```{r echo=FALSE}
+
+# ggplot(clean_master_df, aes(x = sort_code)) +
+#       geom_bar() +
+#       theme_bw() +
+#       coord_flip() +
+#       theme(plot.title = element_text(hjust = 0.5))
+# 
+# print(dplyr::distinct(clean_master_df, sort_code))
+# 
+# clean_master_df %>%
+#   filter(!grepl("o", sort_code) & !grepl("u", sort_code)) %>%
+#   ggplot(aes(x = sort_code)) +
+#       geom_bar() +
+#       coord_flip() +
+#       theme_bw() +
+#       theme(plot.title = element_text(hjust = 0.5))
+
+# filter(!(grepl('bus', .$Col2) | grepl('car', .$Col2)))
+      
+# clean_master_df %>%
+#   filter((grepl("o", sort_code)) & !(grepl("u", sort_code))) %>%
+#   ggplot(aes(x = sort_code)) +
+#       geom_bar() +
+#       coord_flip() +
+#       theme_bw() +
+#       theme(plot.title = element_text(hjust = 0.5))
+# 
+# clean_master_df %>%
+#   filter((grepl("u", sort_code))) %>%
+#     ggplot(aes(x = sort_code)) +
+#       geom_bar() +
+#       coord_flip() +
+#       theme_bw() +
+#       theme(plot.title = element_text(hjust = 0.5))
+      
+
+clean_master_df <- clean_master_df %>%
+  mutate(chart_cat = case_when(!grepl("o", sort_code) & !grepl("u", sort_code) ~ "rank or nest or control",
+                               grepl("o", sort_code) & !grepl("u", sort_code) ~ "other types (clear)",
+                               grepl("u", sort_code) ~ "unclear definitions",
+                               ))
+# clean_master_df %>%
+#   ggplot(aes(x = sort_code)) +
+#     geom_bar() +
+#     coord_flip() +
+#     theme(plot.title = element_text(hjust = 0.5)) +
+#     facet_wrap(~chart_cat)
+#     
+# # breaks <- seq(0,200,10)
+# 
+# ggplot(clean_master_df, aes(x = sort_code, fill = chart_cat)) +
+#       geom_bar() +
+#       # geom_text(aes(label = stat='count', hjust = 1.25) +
+#       theme_bw() +
+#       coord_flip() +
+#       # scale_y_continuous(breaks = breaks) +
+#       scale_fill_grey() +
+#       theme(plot.title = element_text(hjust = 0.5)) 
+# 
+# footest <- clean_master_df %>%
+#          group_by(sort_code, chart_cat) %>%
+#          summarize(count = n())
+
+
+ggplot(clean_master_df %>%
+         group_by(sort_label, chart_cat) %>%
+         summarize(count = n()),
+       aes(x = fct_rev(sort_label), y = count, fill = chart_cat)) +
+       geom_col(width = .6) +
+       geom_text(aes(label = count), size = 3,
+                 nudge_y = 5, color = "black") +
+       guides(fill = guide_legend(nrow = 1,
+                                  title="Relation to ontology:")) +
+       theme_bw() +
+       theme(plot.title = element_text(hjust = .5),
+           legend.position = "bottom",
+           legend.direction = "horizontal",
+           #legend.justification = "left",
+           legend.justification = c(0,1),
+           legend.text = element_text(size = 10),
+           legend.key.size = unit(4, "mm"),
+           legend.margin = margin(t = 0, r = 0, b = , l = -80, unit = "pt"),
+           axis.text = element_text(size = 8)) +
+       coord_flip() +
+       # scale_y_continuous(breaks = breaks) +
+       scale_fill_viridis(discrete = TRUE) +
+       # scale_fill_grey() +
+       # scale_color_grey() +
+       labs(y = "count", x = NULL)
+
+ggsave(filename="rq1_broad_snip_cats_font10_h7.9in.png", width = 6.5, height = 7.9, units = "in")
+
+ggsave(filename="rq1_broad_snip_cats_font10_h6in.png", width = 6.5, height = 6, units = "in")
+
+# USE THIS ONE:
+ggsave(filename="rq1_broad_snip_cats_font10_h5in.png", width = 6.5, height = 5, units = "in")
+
+ggsave(filename="rq1_broad_snip_cats_font10_h6in_w5.png", width = 5, height = 6, units = "in")
+
+ggsave(filename="rq1_broad_snip_cats_font10_h5in_w4.png", width = 4, height = 5, units = "in")
+
+# clean_master_df %>%
+#   filter(is.na(sort_label)) %>%
+#   select(sort_code, sort_label) %>%
+#   mutate(code_len = str_length(sort_code))
+
+
+```
+
+
+
+```{r echo=FALSE, include=FALSE}
+
+# Category data only
+
+cats_snippet_df <- clean_master_df %>%
+  select(rank, nest, control, mixed, other, unclear)
+  # select(code, unclear, rank, control, nest, other, mixed, sort_code)
+
+
+# And make a summary table using groupby and summarize
+
+data.frame(sapply(cats_snippet_df,table))
+
+cats_snippet_df %>%
+  # select(-code, -sort_code) %>%
+  sapply(sum)
+
+# my.list <- as.data.frame(sapply(cats_snippet_df,sum()))
+# my.list <- cbind(my.list,rownames(my.list))
+# rownames(my.list) <- NULL
+
+# TODO: Make mixed and unclear categories here.
+
+totals_table <- cats_snippet_df %>%
+  # select(-code, -sort_code) %>%
+  sapply(sum) %>%
+  as.data.frame() %>%
+  rename(total = ".") %>%
+  tibble::rownames_to_column("label")
+
+```
+
+
+## RQ 2
+
+RQ 2: For those definitions that do not fall within the rank-nesting-control typology, what additional categories would describe them, if any?	
+
+A2: Review all definitions that are categorized “other.” Use frequency table for key concepts (e.g. “centralization” may appear a lot).
+
+I've gotten this started with qual_rvw_all_6857_snippets_coded_noblanks_v01.xlsx
+
+
+Notable ones:
+
+1. Hierarchy defined by network measures, e.g. node trussness in "Social centrality using network hierarchy and community structure" (Saxena et al. 2018) and high degree centrality in "Social Network Determinants of Self-Perceived Influence among Minority and Non-Minority STEM Faculty" (Parker 2014) and "Reframing coalitions as systems interventions: A network study exploring the contribution of a youth violence prevention coalition to broader system capacity" (Bess 2015).
+
+2. Command hierarchy where in addition to the top-down flow of commands, information flow up the command is an essential part of it. "In general, the military falls within the description of a rigid hierarchy with its vertically structured pyramid, narrow span of control, multiple layers of rank and authority, and formal communication structure of information flowing up and orders flowing down." (White 1997) "Power starts from the top and reduces as it goes down the hierarchy [...] On the other hand reports move from the lower level to the top level." (Asito and Alasomuka 2019) This can be considered a subtype of control hierarchies that retains the control but also includes information flow up the levels of control. This follows the old adage that information is power, thus information flows up through the command structure to the powerful, and commands flow down to the less powerful, forming a crucial duality of the power relations of real chains of command.
+
+
+But I will cover these AFTER the analysis, this is just to give me a heads up here.
+
+In other words, I will do a quant analysis, and then do a dive into the actual snippets/excerpts for a qual showcase.
+
+
+What's the process?
+
+Ok, so filter the subset entries that have other, then with those, do a word frequency analysis.
+
+How? 
+
+```{r echo=FALSE, include=FALSE}
+
+# Do word frequency charts for each chart category.
+
+# master_snippet_df 's chart_cat has "existings", "others", "unclears"
+
+# austen_books has a row per line of text, which is the "text" column.
+# and an associated "book" column.
+
+# If I were to do the same for, say, a category...
+# Each def_snippet as the the text column.
+# Each category as the book column.
+
+# load libs
+
+library(tidytext)
+
+# Create the df
+
+category_words <- clean_master_df %>%
+  select(def_snippet, chart_cat) %>%
+  rename(text = def_snippet, category_group = chart_cat) %>%
+  unnest_tokens(word, text) %>%
+  mutate(word = gsub("'s", "", word)) %>%
+  
+  count(category_group, word, sort = TRUE)
+
+total_words <- category_words %>% 
+  group_by(category_group) %>% 
+  summarize(total = sum(n))
+
+category_words <- left_join(category_words, total_words)
+
+# Without removing the 's category_words is 15434 obs.
+
+filter(category_words, grepl("'", word))
+
+# REMOVALS
+# Clean up text, remove stop words
+
+# Remove the rows with numbers
+category_words <- category_words %>%
+  filter(!grepl("[0-9]", word))
+
+stop_list <- as.list(stopwords::stopwords("english"))
+
+# Remove the rows with stop words
+category_words <- category_words %>%
+  filter(!(word %in% stop_list))
+
+category_words <- category_words %>%
+  filter(!(word %in% list("hierarchy", "hierarchical", "hierarchies",
+                          "also", "one", "p", "o", "define", "defines",
+                          "refers")))
+
+# category_words <- category_words %>%
+#   filter(n > 2)
+
+```
+
+```{r echo=FALSE, include=FALSE}
+# ggplot(category_words, aes(n/total, fill = category_group)) +
+#   geom_histogram(show.legend = FALSE) +
+#   xlim(NA, 0.0009) +
+#   facet_wrap(~category_group, ncol = 1, scales = "free_y")  +
+#   scale_fill_viridis(discrete = TRUE, option = "magma") # +
+#   # scale_y_continuous(trans=log_trans())
+# 
+# ggplot(category_words, aes(n/total, fill = category_group)) +
+#   geom_histogram(show.legend = FALSE, bins = 200) +
+#   # xlim(NA, 0.0009) +
+#   facet_wrap(~category_group, ncol = 1, scales = "free_y")  +
+#   scale_fill_viridis(discrete = TRUE, option = "magma") # +
+#   # scale_y_continuous(trans=log_trans())
+
+# These graphs aren't of any importance.
+# Just going through the text mining in R tutorial to undestand the pieces.
+
+```
+
+
+```{r echo=FALSE}
+
+cats_tf_idf <- category_words %>%
+  bind_tf_idf(word, category_group, n) %>%
+  filter(n > 2, tf_idf > 0)
+  # filter(n > 3, tf_idf > 0)
+
+cats_tf_idf %>%
+  filter(grepl("power", word))
+
+cats_tf_idf %>%
+  group_by(category_group) %>%
+  slice_max(tf_idf, n = 7) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = category_group)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~category_group, ncol = 2, scales = "free") +
+  labs(x = "term importance (tf-idf)", y = NULL) +
+  scale_fill_viridis(discrete = TRUE, option = "magma")
+
+cats_tf_idf %>%
+  group_by(category_group) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = category_group)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  facet_wrap(~category_group, ncol = 1, scales = "free_y") +
+  labs(x = "term importance (tf-idf)", y = NULL) +
+  theme_bw() +
+  theme(text = element_text(size = 8),element_line(size =1)) +
+  # theme(axis.text = element_text(size = 10)) +
+  scale_fill_viridis(discrete = TRUE)
+
+ggsave(filename="rq2_tf-idf_other_compare_w6-5.png", width = 6.5,
+       # height = 7.9, 
+       units = "in")
+
+cats_tf_idf %>%
+  group_by(category_group) %>%
+  slice_max(tf_idf, n = 15) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = category_group)) +
+  geom_col(show.legend = FALSE) +
+  theme(text = element_text(size = 8),element_line(size =1)) +
+  labs(x = "tf-idf", y = NULL) 
+
+# Here I could also do individual charts.
+
+```
+
+```{r eval=FALSE}
+# Search for chain of command here.
+
+clean_master_df %>%
+  filter(grepl("chain of command", def_snippet)) %>%
+  write.csv("chain_of_command_examples_v01.csv", row.names = FALSE)
+
+# Save to chain of command csv file to open in excel for easier reading.
+
+```
+
+
+
+## RQ 3
+
+RQ 3: How do definitions of hierarchy vary within and among disciplines?
+
+A3: Use line charts. If the lines don’t overlap too much, a trellis chart faceted by major discipline with 6 categories of lines within each.
+
+Stefani recommends that for research question 3, I can use a table of examples for disciplines, typical definition. Discipline, definition, citation. This should be add some qualitative to the quant mix. With having these "stereotypical" definitions, this may help with people citing this paper.
+
+
+NOTE: "How is the SCImago Journal Ranking Calculated? 
+Since the relevance of the journal is an important factor to the scientific community, there is a division. As a result of the Q-ranking of journals, each journal falls into one of four quartiles: from Q1 (highest) to Q4 (lowest). The most reputable journals belong to the first two quartiles - Q1 and Q2. The journals are distributed by quartile automatically based on complex scientometric calculations involving their citation, which in turn are converted into ordinary percentages."
+
+```{r echo=FALSE, fig.width=6.5, dpi=300}
+
+q3_fields_df <- clean_master_df %>%
+  filter(!is.na(sjr_title)) %>%
+  select(chart_cat, sjr_categories, title, sort_code, unclear, rank, control, nest, other, mixed,
+         publication_year, author, place)
+
+# write.csv(q3_fields_df,"q3_fields_df_v01.csv", row.names = FALSE)
+
+just_sjr_cats <- q3_fields_df %>%
+  select(sjr_categories, chart_cat, sort_code) %>%
+  separate_rows(sjr_categories, sep = ";", convert = FALSE) %>%
+  mutate(sjr_categories = gsub(' \\(Q1\\)', '', .$sjr_categories)) %>%
+  mutate(sjr_categories = gsub(' \\(Q2\\)', '', .$sjr_categories)) %>%
+  mutate(sjr_categories = gsub(' \\(Q3\\)', '', .$sjr_categories)) %>%
+  mutate(sjr_categories = gsub(' \\(Q4\\)', '', .$sjr_categories)) %>%
+  mutate(sjr_categories = trimws(sjr_categories))
+
+tlly_sjr <- just_sjr_cats %>%
+  group_by(sjr_categories) %>% 
+  tally() %>%
+  rename(count = n)
+
+tlly_sjr %>%
+  slice_max(count, n = 20) %>%
+  ggplot(aes(count, fct_reorder(sjr_categories, count))) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = count), hjust = 1.25, colour = "white" ) +
+  # guides(fill=FALSE) +
+  theme_bw() +
+  labs(x = "count", y = NULL) 
+  # scale_fill_viridis(discrete = TRUE, option = "magma") +
+  # scale_fill_grey()
+
+  # geom_text(aes(label = sprintf("%.1f", count), y= count),  vjust = 3)+
+  # guides(fill=FALSE)
+
+```
+
+What % of document set had scopus cats? Our document set had how many distinct cats?
+
+
+```{r}
+
+# What % of document set had scopus cats?
+
+nrow(q3_fields_df)
+
+# Our document set had how many distinct cats?
+
+distinct(just_sjr_cats, sjr_categories)
+
+nrow(distinct(just_sjr_cats, sjr_categories))
+
+201/1121
+
+# If needed to show the full list of categories and their count
+# For supplemental or something else.
+
+just_sjr_cats %>%
+  group_by(sjr_categories) %>% 
+  tally() %>%
+  rename(count = n) %>%
+  ggplot(aes(count, fct_reorder(sjr_categories, count))) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = count), hjust = 1.25, colour = "white" ) +
+  # guides(fill=FALSE) +
+  theme_bw() +
+  labs(x = "count", y = NULL) 
+
+# If I need the average number of categories per item, I can count the 
+# ; in each field and then add 1, because cat1 ; cat2 has 2 cats, 1 ; .
+
+mean_cats <- q3_fields_df %>%
+  mutate(semicolon_count = str_count(sjr_categories, ";")) %>%
+  select(semicolon_count)
+
+mean(mean_cats$semicolon_count)
+median(mean_cats$semicolon_count)
+
+```
+
+
+
+```{r echo=FALSE}
+
+tlly_sjr <- just_sjr_cats %>%
+  group_by(sjr_categories, sort_code) %>% 
+  tally %>%
+  rename(count = n)
+
+# I would group_by, slice, then ungroup, then regroup?
+# But how do I preserve the sort_codes?
+
+# Boneheaded way? Just pre-filter.
+
+tlly_sjr <- just_sjr_cats %>%
+  group_by(sjr_categories) %>% 
+  tally %>%
+  rename(count = n) %>%
+  slice_max(count, n = 20)
+
+sjr_cat_list <- as.list(distinct(tlly_sjr, sjr_categories))
+class(sjr_cat_list)
+
+tlly_codes_sjr <- just_sjr_cats %>%
+  filter(sjr_categories %in% tlly_sjr$sjr_categories) %>%
+  mutate(sjr_categories = factor(sjr_categories, 
+                                 levels = tlly_sjr$sjr_categories)) %>%
+  group_by(sjr_categories, sort_code) %>% 
+  tally %>%
+  rename(count = n) 
+
+# distinct(tlly_codes_sjr, sjr_categories)
+
+tlly_subgr_sjr <- tlly_codes_sjr %>%
+  mutate(pure_mix_unclear_cats = case_when(
+    sort_code == "c" ~ "control",
+    sort_code == "n" ~ "nest",
+    sort_code == "r" ~ "rank",
+    grepl("m", sort_code) ~ "mixed",
+    grepl("o", sort_code) & !grepl("u", sort_code) ~ "other types",
+    grepl("u", sort_code) ~ "unclear definitions"))
+
+tlly_subgr_sjr$pure_mix_unclear_cats <- factor(tlly_subgr_sjr$pure_mix_unclear_cats,
+     levels = c("control", "nest","rank",
+                "mixed",
+                "other types",
+                "unclear definitions"))
+
+tlly_subgr_sjr <- tlly_subgr_sjr %>%
+  group_by(sjr_categories, pure_mix_unclear_cats) %>% 
+  summarize(subgr_count = sum(count))
+
+tlly_subgr_sjr %>%
+  ggplot(aes(x=subgr_count, y=fct_rev(sjr_categories),
+  # ggplot(aes(x=subgr_count, y=fct_reorder(sjr_categories, subgr_count),
+             fill = pure_mix_unclear_cats
+             # fill = fct_relevel(pure_mix_unclear_cats, 
+             #                    "control", "nest","rank",
+             #                    "mixed types",
+             #                    "other types",
+             #                    "unclear definitions")
+             )) +
+  geom_col() +
+  theme_bw() +
+  # scale_fill_viridis(discrete = TRUE, option = "E") +
+  scale_fill_viridis(discrete = TRUE) +
+  #scale_fill_grey() +
+  labs(x = "count", y = NULL) 
+
+tlly_subgr_sjr %>%
+  rename(types = pure_mix_unclear_cats) %>%
+  ggplot(aes(x=subgr_count, y=fct_reorder(sjr_categories, subgr_count),
+             fill = types
+             # fill = fct_relevel(pure_mix_unclear_cats, 
+             #                    "control", "nest","rank",
+             #                    "mixed types",
+             #                    "other types",
+             #                    "unclear definitions")
+             )) +
+  #geom_col() +
+  geom_col(width = 0.6, position = "fill") +
+  theme_bw() +
+  scale_fill_viridis(discrete = TRUE) +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+  guides(fill = guide_legend(nrow = 2))+
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.justification = "left",
+        legend.margin = margin(t = 0, r = 0, b = , l = -30, unit = "pt"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(4, "mm"),
+        axis.text = element_text(size = 10)) +
+  labs(x = "count", y = NULL) 
+
+ggsave(filename="rq3_sjrcats_propor_wrap30_font10_h7.9in.png", width = 6.5, height = 7.9, units = "in")
+
+
+tlly_subgr_sjr %>%
+  rename(types = pure_mix_unclear_cats) %>%
+  ggplot(aes(x=subgr_count, y = fct_rev(sjr_categories), # y=fct_reorder(sjr_categories, subgr_count),
+             fill = types
+             )) +
+  geom_col(width = 0.6) +
+  # geom_col(position = "fill") +
+  theme_bw() +
+  scale_fill_viridis(discrete = TRUE) +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+  guides(fill = guide_legend(nrow = 2,
+                             title="Definitions by dimension(s)\nof hierarchy:"))+
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.justification = "left",
+        legend.margin = margin(t = 0, r = 0, b = , l = -40, unit = "pt"),
+        legend.text = element_text(size = 10),
+        legend.key.size = unit(4, "mm"),
+        axis.text = element_text(size = 8)) +
+  labs(x = "count", y = NULL) 
+
+ggsave(filename="rq3_sjrcats_count_wrap30_font8_h6in_w6-5.png", width = 6.5, height = 6, units = "in")
+
+# ggsave(filename="testing_wrap30_font10.png", width = 180, height = 200, units = "mm")
+
+
+# Old
+
+# tlly_sjr %>%
+#   slice_max(count, n = 20) %>%
+#   ggplot(aes(count, fct_reorder(sjr_categories, count),
+#              group = sjr_categories, fill = sjr_categories,
+#              fill = sort_code)) +
+#   geom_col(show.legend = FALSE, position = position_dodge(0.9)) +
+#   geom_text(aes(label = count), hjust = 1.25, colour = "white" ) +
+#   # guides(fill=FALSE) +
+#   theme_bw() +
+#   labs(x = "count", y = NULL) 
+
+```
+
+
+## RQ 4
+
+RQ 4: What other topics tend to co-occur with hierarchy in social science literature?	
+
+A4: Frequency analysis of words as they relate to categories and overall. Two more computational approaches are available, but come with the caveat that too much compute may be needed.
+
+A classification tree could be used to distinguish among terms that best predict the category of the snippet.
+
+Topic modeling is an option, but doing 3,000 articles with 8,000 words each will not be feasible. In this case I may be able to set a limit on words, e.g. select 500 words on either side of the definitional phrase.
+
+For topic modeling, I would need to start with a DTM, or DocumentTermMatrix. For that I need to create a corpus.
+
+Using this: https://knowledger.rbind.io/post/topic-modeling-using-r/
+
+Since I am importing a spreadsheet, I need to create a mapping for the corpus to use. The first item is the content used in the modeling, the remaining items are added as metadata to the corpus object.
+
+From rdoc: "A data frame source interprets each row of the data frame x as a document. The first column must be named "doc_id" and contain a unique string identifier for each document. The second column must be named "text" and contain a UTF-8 encoded string representing the document's content. Optional additional columns are used as document level metadata."
+
+ISSUE: The tm package has completely changed since most tutorials were written.
+Therefore, skip tm and try textmineR.
+
+
+
+
+```{r echo=FALSE, include=FALSE}
+
+# library(tm)
+# 
+# prep_for_corpus_df <- tibble::rowid_to_column(foo_snippet_df, "uniq_id")
+# 
+# # Alternate method in case there's a problem:
+# # prep_for_corpus_df<- foo_snippet_df
+# # prep_for_corpus_df$uniq_id <- seq_along(prep_for_corpus_df[,1])
+# 
+# map_cols <- list(doc_id = "uniq_id", 
+#                  text = "def_snippet",
+#                  zot_id = "zot_id", 
+#                  title = "title",
+#                  search_term = "search_term",
+#                  code  = "code",
+#                  sort_code = "sort_code",
+#                  unclear = "unclear",
+#                  rank  =  "rank",
+#                  control =  "control",
+#                  nest  = "nest",
+#                  other = "other",
+#                  mixed =  "mixed",
+#                  chart_cat = "chart_cat")
+
+```
+
+
+```{r echo=FALSE, include=FALSE}
+
+# # Doesn't friggin work
+# corpus_snippets <- tm::Corpus(tm::DataframeSource(prep_for_corpus_df), 
+#                               readerControl = list(reader = tm::readTabular(mapping = map_cols)))
+# 
+# prep_for_corpus_df <- rename(prep_for_corpus_df, doc_id = uniq_id, text = def_snippet)
+# 
+# docs <- data.frame(doc_id = c("doc_1", "doc_2"),
+#                    text = c("This is a text.", "This another one."),
+#                    dmeta1 = 1:2, dmeta2 = letters[1:2],
+#                    stringsAsFactors = FALSE)
+# 
+# (ds <- DataframeSource(prep_for_corpus_df))
+# x <- SimpleCorpus(ds)
+# # inspect(x)
+# meta(x)
+
+```
+
+
+```{r echo=FALSE, include=FALSE}
+
+# # TM has been changed and nerfed. Doesn't seem viable.
+# # tm can't make a DTM anymore, it's depreciated.
+# 
+# x.dtm <- tm::DocumentTermMatrix(x, control = list(stemming = TRUE, stopwords = TRUE,
+#                                     minWordLength = 2, removeNumbers = TRUE, removePunctuation = TRUE))
+
+
+# That was a painful rabbit hole. Keep it simple, try the RQ #2 approach isntead.
+
+```
+
+
+
+```{r echo=FALSE, include=FALSE}
+
+# Create the df
+
+sub_cat_words <- clean_master_df %>%
+  select(def_snippet, sort_label) %>%
+  rename(text = def_snippet, subcat = sort_label) %>%
+  unnest_tokens(word, text) %>%
+  mutate(word = gsub("'s", "", word)) %>%
+  mutate(word = gsub("’s", "", word)) %>%
+  count(subcat, word, sort = TRUE)
+
+filter(sub_cat_words, grepl("'", word))
+filter(sub_cat_words, grepl("system", word))
+
+ttl_words <- sub_cat_words %>% 
+  group_by(subcat) %>% 
+  summarize(total = sum(n))
+
+sub_cat_words <- left_join(sub_cat_words, ttl_words)
+
+# 28222
+# sub_cat_words
+# REMOVALS
+
+# These should be removed
+num_words <- sub_cat_words %>%
+  filter(grepl("[0-9]", word))
+
+# Remove the rows with numbers
+sub_cat_words <- sub_cat_words %>%
+  filter(!grepl("[0-9]", word))
+
+stop_list <- as.list(stopwords::stopwords("english"))
+
+# Remove the rows with stop words
+sub_cat_words <- sub_cat_words %>%
+  filter(!(word %in% stop_list))
+
+sub_cat_words <- sub_cat_words %>%
+  filter(!(word %in% list("hierarchy", "hierarchical", "hierarchies",
+                          "also", "one", "p", "o", "define", "defines",
+                          "refers")))
+
+sub_cat_words <- sub_cat_words %>%
+  filter(n > 2)
+
+```
+
+
+```{r echo=FALSE}
+
+sub_cat_words <- sub_cat_words %>%
+  filter(!grepl("unclear", subcat)) %>%
+  filter(!grepl("other", subcat))
+  
+single_sub_cat_words <- sub_cat_words %>%
+  filter(subcat %in% c("control", "nest", "rank") )
+
+mixed_sub_cat_words <- sub_cat_words %>%
+  filter(!(subcat %in% c("control", "nest", "rank")))
+
+single_subcats_tf_idf <- single_sub_cat_words %>%
+  bind_tf_idf(word, subcat, n)
+
+mixed_subcats_tf_idf <- mixed_sub_cat_words %>%
+  bind_tf_idf(word, subcat, n)
+
+subcats_tf_idf <- sub_cat_words %>%
+  bind_tf_idf(word, subcat, n)
+
+# tlly_sjr <- just_sjr_cats %>%
+#   group_by(sjr_categories) %>% 
+#   tally %>%
+#   rename(count = n)
+
+single_subcats_tf_idf %>%
+  group_by(subcat) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = subcat)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~subcat, 
+             ncol = 2, 
+             scales = "free_y") +
+  labs(x = "term importance (tf-idf)", y = NULL) +
+  theme_bw() +
+  # scale_fill_viridis(discrete = TRUE, option = "E")
+  scale_fill_grey()
+
+mixed_subcats_tf_idf %>%
+  group_by(subcat) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = subcat)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~subcat, ncol = 1, scales = "free_y") +
+  labs(x = "term importance (tf-idf)", y = NULL) +
+  theme_bw() +
+  # scale_fill_viridis(discrete = TRUE, option = "E")
+  scale_fill_grey()
+
+subcats_tf_idf %>%
+  group_by(subcat) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = subcat)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  facet_wrap(~subcat, ncol = 3, scales = "free") +
+  theme_bw() +
+  scale_fill_viridis(discrete = TRUE, option = "C") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+  guides(fill = guide_legend(nrow = 2,
+                             title="Types:"))+
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 8)) +
+  labs(x = "term importance (tf-idf)", y = NULL)
+
+# I could use random forest here to enable an apples-to-apples comparison
+# of word importance for classifying a snippet as a particular category.
+# But that seems really overkill.
+
+# ggsave(filename="q4_types_font10_h7.9in.png", width = 6.5, height = 7.9, units = "in")
+
+ggsave(filename="q4_types_font10_w6-5.png", width = 6.5, units = "in")
+
+ggsave(filename="q4_types_font10_w6-5_h5-5.png", width = 6.5, height = 5.5, units = "in")
+
+
+subcats_tf_idf %>%
+  group_by(subcat) %>%
+  slice_max(tf_idf, n = 15) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = subcat)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  facet_wrap(~subcat, ncol = 3, scales = "free") +
+  theme_bw() +
+  scale_fill_viridis(discrete = TRUE, option = "C") +
+  scale_y_discrete(labels = function(x) str_wrap(x, width = 35)) +
+  guides(fill = guide_legend(nrow = 2,
+                             title="Types:"))+
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 8)) +
+  labs(x = "term importance (tf-idf)", y = NULL)
+
+```
+
+
+
+
+
+
+
+
+
