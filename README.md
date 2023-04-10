@@ -8,7 +8,7 @@ The overall approach I use here should be something any researcher can do easily
 
 ## Procedure overview:
 
-I use Scraper API with Scholarly to scrape Google Scholar (GSc), turn the resulting JSON into bibtext files, important those into Zotero, tag them by which definitional search term they came from, request PDFs via Zotero's built-in tool (excluding all items that don't have full-text from further processing), use some javascript to extract metadata and definitional snippets from Zotero for each item, and then make a CSV with all that data. I then open all ~1k links from the metadata in Chrome and add them all to Zotero manually, then do some cleanup and merge the data so I have journal titles for the items that have them (some are dissertations or working papers). Below I go into this process in more detail.
+I use Scraper API with Scholarly to query and scrape Google Scholar (GSc), turn the resulting JSON into bibtext files, important those into Zotero, tag them by which definitional search term they came from, request PDFs via Zotero's built-in tool (excluding all items that don't have full-text from further processing), use some javascript to extract metadata and definitional snippets from Zotero for each item, and then make a CSV with all that data. I then open all ~1k links from the metadata in Chrome and add them all to Zotero manually, then do some cleanup and merge the data so I have journal titles for the items that have them (some are dissertations or working papers). Below I go into this process in more detail.
 
 ## The main scripts
 
